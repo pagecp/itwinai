@@ -8,24 +8,31 @@ from torch.utils.data import DataLoader
 from engine import evaluate
 from initialization import device, beta, criterion, n_avg, pixel_wise_criterion
 
+import configparser as cp
+
+#### Configuration file
+config = cp.ConfigParser()
+config.read('xtclim.json')
+
 # pick the season to study among:
 # '' (none, i.e. full dataset), 'winter_', 'spring_', 'summer_', 'autumn_'
+seasons = config.get('GENERAL', 'seasons')
 
 # choose wether to evaluate train and test data, and/or projections
-past_evaluation = False
-future_evaluation = True
+past_evaluation = config.get('MODEL', 'past_evaluation')
+future_evaluation = config.get('MODEL', 'future_evaluation')
 
 
 if past_evaluation:
-    for season in ['winter_', 'spring_', 'summer_', 'autumn_']:
+    for season in seasons:
         
         # load previously trained model
         cvae_model = model.ConvVAE().to(device)
-        cvae_model.load_state_dict(torch.load(f'../outputs/cvae_model_{season}1d.pth'))
+        cvae_model.load_state_dict(torch.load(f'../outputs/cvae_model_{season}_1d.pth'))
         
         # train set and data loader
-        train_time = pd.read_csv(f"../input/dates_train_{season}data.csv")
-        train_data = np.load(f"../input/preprocessed_1d_train_{season}data_allssp.npy")
+        train_time = pd.read_csv(f"../input/dates_train_{season}_data.csv")
+        train_data = np.load(f"../input/preprocessed_1d_train_{season}_data_allssp.npy")
         n_train = len(train_data)
         trainset = [ ( torch.from_numpy(np.reshape(train_data[i], (3, 32, 32))), 
                         train_time['0'][i] ) for i in range(n_train) ]
@@ -34,8 +41,8 @@ if past_evaluation:
         )
 
         # test set and data loader
-        test_time = pd.read_csv(f"../input/dates_test_{season}data.csv")
-        test_data = np.load(f"../input/preprocessed_1d_test_{season}data_allssp.npy")
+        test_time = pd.read_csv(f"../input/dates_test_{season}_data.csv")
+        test_data = np.load(f"../input/preprocessed_1d_test_{season}_data_allssp.npy")
         n_test = len(test_data)
         testset = [ ( torch.from_numpy(np.reshape(test_data[i], (3, 32, 32))), 
                         test_time['0'][i] ) for i in range(n_test) ]
@@ -68,24 +75,25 @@ if past_evaluation:
         train_avg_losses = train_avg_losses/n_avg
         test_avg_losses = test_avg_losses/n_avg
         
-        pd.DataFrame(tot_train_losses).to_csv(f"../outputs/train_losses_{season}1d_allssp.csv")
-        pd.DataFrame(tot_test_losses).to_csv(f"../outputs/test_losses_{season}1d_allssp.csv")
+        pd.DataFrame(tot_train_losses).to_csv(f"../outputs/train_losses_{season}_1d_allssp.csv")
+        pd.DataFrame(tot_test_losses).to_csv(f"../outputs/test_losses_{season}_1d_allssp.csv")
         print('Train average loss:', train_avg_losses)
         print('Test average loss:', test_avg_losses)
 
 
 if future_evaluation:
-    for season in ['winter_', 'spring_', 'summer_', 'autumn_']:
+    scenarios = config.get('GENERAL', 'scenarios')
+    for season in seasons:
         
         # load previously trained model
         cvae_model = model.ConvVAE().to(device)
-        cvae_model.load_state_dict(torch.load(f'../outputs/cvae_model_{season}1d.pth'))
+        cvae_model.load_state_dict(torch.load(f'../outputs/cvae_model_{season}_1d.pth'))
 
-        for scenario in ['585', '370', '245', '126']:
+        for scenario in scenarios:
             
             # projection set and data loader
-            proj_time = pd.read_csv(f"../input/dates_proj_{season}data.csv")
-            proj_data = np.load(f"../input/preprocessed_1d_proj{scenario}_{season}data_allssp.npy")
+            proj_time = pd.read_csv(f"../input/dates_proj_{season}_data.csv")
+            proj_data = np.load(f"../input/preprocessed_1d_proj{scenario}_{season}_data_allssp.npy")
             n_proj = len(proj_data)
             projset = [ ( torch.from_numpy(np.reshape(proj_data[i], (3, 32, 32))), 
                             proj_time['0'][i] ) for i in range(n_proj) ]
@@ -110,5 +118,5 @@ if future_evaluation:
             proj_avg_losses = proj_avg_losses/n_avg
 
             # save the losses time series
-            pd.DataFrame(tot_proj_losses).to_csv(f"../outputs/proj{scenario}_losses_{season}1d_allssp.csv")
+            pd.DataFrame(tot_proj_losses).to_csv(f"../outputs/proj{scenario}_losses_{season}_1d_allssp.csv")
             print(f'SSP{scenario} Projection average loss:', proj_avg_losses, 'for', season[:-1])

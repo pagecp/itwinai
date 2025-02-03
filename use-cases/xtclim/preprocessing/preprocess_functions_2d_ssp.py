@@ -15,6 +15,8 @@ import numpy as np
 import xarray as xr
 import cftime
 import pandas as pd
+import configparser as cp
+import json
 
 from itwinai.components import DataGetter, monitor_exec
 
@@ -89,18 +91,6 @@ class PreprocessData(DataGetter):
 
         return land_prop, lat_list, lon_list
 
-    def get_extrema(self, histo_dataset: np.ndarray, proj_dataset: np.ndarray) -> np.array:
-        """
-        Computes global extrema over past and future data.
-
-        Parameters:
-        histo_dataset: historical data
-        proj_dataset: projection data
-        """
-        global_min = min(np.min(histo_dataset), np.min(proj_dataset))
-        global_max = max(np.max(histo_dataset), np.max(proj_dataset))
-        return np.array([global_min, global_max])
-
     def normalize(self, nd_dset: np.ndarray, extrema: np.array) -> np.ndarray:
         """
         Normalizes a data set with given extrema.
@@ -155,21 +145,21 @@ class PreprocessData(DataGetter):
         return train_data, test_data, train_time, test_time
 
     ##### 5. Combine into a 2D-Array
-    def ndarray_to_2d(self, temp_dset: np.ndarray, land_prop: np.ndarray) -> np.ndarray:
+    def ndarray_to_2d(self, atmosfield_dset: np.ndarray, land_prop: np.ndarray) -> np.ndarray:
         """
         Combines climate variable and land-sea mask data sets.
 
         Parameters:
-        temp_dset: climate variable data
+        atmosfield_dset: climate variable data
         land_prop: land-sea mask data
         """
-        n_t = np.shape(temp_dset)[0]
-        n_lat = np.shape(temp_dset)[1]
-        n_lon = np.shape(temp_dset)[2]
+        n_t = np.shape(atmosfield_dset)[0]
+        n_lat = np.shape(atmosfield_dset)[1]
+        n_lon = np.shape(atmosfield_dset)[2]
 
         # combine all variables on a same period to a new 2D-array
         total_dset = np.zeros((n_t, n_lat, n_lon, 2), dtype="float32")
-        total_dset[:, :, :, 0] = temp_dset.reshape(n_t, n_lat, n_lon)
+        total_dset[:, :, :, 0] = atmosfield_dset.reshape(n_t, n_lat, n_lon)
         total_dset[:, :, :, 1] = np.transpose(
             np.repeat(land_prop, n_t, axis=2), axes=[2, 0, 1]
         )
@@ -178,133 +168,115 @@ class PreprocessData(DataGetter):
 
     @monitor_exec
     def execute(self):
+
+        def get_extrema(self, histo_dataset: np.ndarray) -> np.array:
+            """
+            Computes global extrema over past data.
+            
+            Parameters:
+            histo_dataset: historical data
+            """
+            global_min = min(np.min(histo_dataset))
+            global_max = max(np.max(histo_dataset))
+            return np.array([global_min, global_max])
+
+        #### Configuration file
+        config = cp.ConfigParser()
+        config.read('xtclim.json')
+        
         #### 1. Load Data to xarrays
-        data_dir = self.dataset_root
+        data_dir = config.get('GENERAL','datadir')
 
-        # Historical Datasets
-        # regrouped by climate variable
+        datasets_histo = json.loads(config.get('GENERAL','histo_extr'))
 
-        temp_50 = xr.open_dataset(
-            f"{data_dir}tasmax_day_CMCC-ESM2_historical_r1i1p1f1_gn_19500101-19741231.nc"
-        )
-        temp_75 = xr.open_dataset(
-            f"{data_dir}tasmax_day_CMCC-ESM2_historical_r1i1p1f1_gn_19750101-19991231.nc"
-        )
-        temp_00 = xr.open_dataset(
-            f"{data_dir}tasmax_day_CMCC-ESM2_historical_r1i1p1f1_gn_20000101-20141231.nc"
-        )
-        temp_histo = xr.concat([temp_50, temp_75, temp_00], "time")
+        atmosfield = []
+        for f in datasets_histo:
+            print(f)
+            # Historical Datasets
+            # regrouped by climate variable
+            atmosfield.append(xr.open_dataset(data_dir+'/'+f))
 
-        # Projection Datasets
-        # regrouped by climate variable
-        # IPCC scenarios: SSP1-2.6, SSP2-4.5, SSP3-7.0, SSP5-8.5
-        # choose among "126", "245", "370", "585"
-        scenario = self.scenario
-
-        temp_15 = xr.open_dataset(
-            f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20150101-20391231.nc"
-        )
-        temp_40 = xr.open_dataset(
-            f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20400101-20641231.nc"
-        )
-        temp_65 = xr.open_dataset(
-            f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20650101-20891231.nc"
-        )
-        temp_90 = xr.open_dataset(
-            f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20900101-21001231.nc"
-        )
-        temp_proj = xr.concat([temp_15, temp_40, temp_65, temp_90], "time")
+        atmosfield_histo = xr.concat(atmosfield, "time")
 
         # Load land-sea mask data
         sftlf = xr.open_dataset(
-            f"{data_dir}sftlf_fx_CESM2_historical_r9i1p1f1_gn.nc",
+            f"{data_dir}/sftlf_fx_CESM2_historical_r9i1p1f1_gn.nc",
             chunks={"time": 10},
         )
-
+            
         ##### 2. Restrict to a Geospatial Square
-        sq32_west_europe = {"min_lon": -10, "max_lon": 29, "min_lat": 36, "max_lat": 66}
+        min_lon = config.get('GENERAL', 'min_lon')
+        max_lon = config.get('GENERAL', 'max_lon')
+        min_lat = config.get('GENERAL', 'min_lat')
+        max_lat = config.get('GENERAL', 'max_lat')
+        sq32_world_region = {"min_lon": min_lon, "max_lon": max_lon, "min_lat": min_lat, "max_lat": max_lat}
+        
+        land_prop, lat_list, lon_list = self.sftlf_to_ndarray(sftlf, sq32_world_region)
+            
+        # Crop original data to chosen region
+        atmosfield_histo_nd, time_list = self.xr_to_ndarray(atmosfield_histo, sq32_world_region)
 
-        land_prop, lat_list, lon_list = self.sftlf_to_ndarray(sftlf, sq32_west_europe)
-
-        ##### 6. Step-by-Step Preprocessing
-
-        # Crop original data to Western Europe
-        temp_histo_nd, time_list = self.xr_to_ndarray(temp_histo, sq32_west_europe)
-        temp_proj_nd, time_proj = self.xr_to_ndarray(temp_proj, sq32_west_europe)
-
-
-        # Compute the variable extrema over history and projections
-        # temp_extrema = get_extrema(temp_histo_nd, temp_proj_nd)
-
-        # Here are the results for CMCC-ESM2 (all scenarios)
-        # to save time
-        temp_extrema = np.array([234.8754, 327.64])
-        # ssp585 array([234.8754, 327.64  ], dtype=float32)
-        # ssp370 array([234.8754 , 325.43323], dtype=float32)
-        # ssp245 array([234.8754, 324.8263], dtype=float32)
-        # ssp126 array([234.8754, 323.6651], dtype=float32)
+        # Compute the variable extrema over history
+        atmosfield_extrema = get_extrema(atmosfield_histo_nd)
 
         # Normalize data with the above extrema
-        temp_histo_norm = self.normalize(temp_histo_nd, temp_extrema)
-        temp_proj_norm = self.normalize(temp_proj_nd, temp_extrema)
+        atmosfield_histo_norm = self.normalize(atmosfield_histo_nd, atmosfield_extrema)
 
         # Split data into train and test data sets
-        train_temp, test_temp, train_time, test_time = self.split_train_test(
-            temp_histo_norm, time_list
+        train_atmosfield, test_atmosfield, train_time, test_time = self.split_train_test(
+            atmosfield_histo_norm, time_list
         )
-
+            
         # Add up split data and land-sea mask
-        total_train = self.ndarray_to_2d(train_temp, land_prop)
-        total_test = self.ndarray_to_2d(test_temp, land_prop)
-        total_proj = self.ndarray_to_2d(temp_proj_norm, land_prop)
-
-
-        ##### 7. Save Results
+        total_train = self.ndarray_to_2d(train_atmosfield, land_prop)
+        total_test = self.ndarray_to_2d(test_atmosfield, land_prop)
 
         # Save train and test data sets
         np.save("input/preprocessed_2d_train_data_allssp.npy", total_train)
         np.save("input/preprocessed_2d_test_data_allssp.npy", total_test)
         pd.DataFrame(train_time).to_csv("input/dates_train_data.csv")
         pd.DataFrame(test_time).to_csv("input/dates_test_data.csv")
-
-        # Save projection data for one scenario
-        np.save(f"input/preprocessed_2d_proj{scenario}_data_allssp.npy", total_proj)
-        pd.DataFrame(time_proj).to_csv("input/dates_proj_data.csv")
-
-
-        ##### 8. Preprocessing for All Scenarios
-
-        # This part is to be run as a complement to 6. and 7.
-
-        # Here you can remove the scenario you already run in 6. and 7.
-        #scenarios = ["126", "245", "370", "585"]
-        #TODO: Discuss with Anne/Christian
-        #scenarios = ["245", "585"]
-        scenarios = [self.scenario]
-
+            
+        # Projection Datasets
+        # regrouped by climate variable
+        # IPCC scenarios: SSP1-2.6, SSP2-4.5, SSP3-7.0, SSP5-8.5
+        # choose among "126", "245", "370", "585"
+        # scenario = self.scenario
+        scenarios = config.get('GENERAL', 'scenarios')
+        
         for scenario in scenarios:
 
-            # Load projection data
-            temp_15 = xr.open_dataset(
-                f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20150101-20391231.nc"
-            )
-            temp_40 = xr.open_dataset(
-                f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20400101-20641231.nc"
-            )
-            temp_65 = xr.open_dataset(
-                f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20650101-20891231.nc"
-            )
-            temp_90 = xr.open_dataset(
-                f"{data_dir}tasmax_day_CMCC-ESM2_ssp{scenario}_r1i1p1f1_gn_20900101-21001231.nc"
-            )
-            temp_proj = xr.concat([temp_15, temp_40, temp_65, temp_90], "time")
+            datasets_histo = config.get('GENERAL','scenario_extr_'+scenario)
 
-            # Process projection data
-            temp_proj_nd, time_proj = self.xr_to_ndarray(temp_proj, sq32_west_europe)
-            # extrema for all scenarios in CMCC-ESM2
-            temp_extrema = np.array([234.8754, 327.64])
-            temp_proj_norm = self.normalize(temp_proj_nd, temp_extrema)
-            total_proj = self.ndarray_to_2d(temp_proj_norm, land_prop)
-
-            # Save results
+            atmosfield = []
+            for f in datasets_proj:
+                # SSP Datasets
+                # regrouped by climate variable
+                atmosfield.append(xr.open_dataset(data_dir+'/'+f))
+                
+            atmosfield_proj = xr.concat(atmosfield, "time")
+            
+            ##### 6. Step-by-Step Preprocessing
+            
+            # Crop original data to chosen region
+            atmosfield_proj_nd, time_proj = self.xr_to_ndarray(atmosfield_proj, sq32_world_region)
+            
+            # Here are the results for CMCC-ESM2 (all scenarios)
+            # to save time
+            # atmosfield_extrema = np.array([234.8754, 327.64])
+            # ssp585 array([234.8754, 327.64  ], dtype=float32)
+            # ssp370 array([234.8754 , 325.43323], dtype=float32)
+            # ssp245 array([234.8754, 324.8263], dtype=float32)
+            # ssp126 array([234.8754, 323.6651], dtype=float32)
+            
+            # Normalize data with the above extrema
+            atmosfield_proj_norm = self.normalize(atmosfield_proj_nd, atmosfield_extrema)
+            
+            # Add up land-sea mask
+            total_proj = self.ndarray_to_2d(atmosfield_proj_norm, land_prop)
+            
+            ##### 7. Save Results
+            
+            # Save projection data for one scenario
             np.save(f"input/preprocessed_2d_proj{scenario}_data_allssp.npy", total_proj)
+            pd.DataFrame(time_proj).to_csv("input/dates_proj{scenario}_data.csv")

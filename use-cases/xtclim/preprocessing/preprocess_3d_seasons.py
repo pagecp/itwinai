@@ -12,16 +12,20 @@
 
 import numpy as np
 import pandas as pd
+import configparser as cp
 
+#### Configuration file
+config = cp.ConfigParser()
+config.read('xtclim.json')
 
 # #### 1. Load Data to xarray
 
 # choose the needed number of members
-n_memb = 1
+n_memb = config.get('TRAIN', 'n_memb')
 
 # define relevant scenarios
 #scenarios = ["126", "245", "370", "585"]
-scenarios = ["245", "585"]
+scenarios = config.get('GENERAL', 'scenarios')
 
 # Load preprocessed "daily temperature images" and time series
 
