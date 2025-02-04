@@ -1,0 +1,4 @@
+[tool.setuptools.packages.find]
+# Declare this package as part of the `itwinai.plugins` namespace
+where = ["src"]
+include = ["itwinai.plugins.xtclim"]
